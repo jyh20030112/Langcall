@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+langgraph
+litellm
+pydantic
+pydantic-settings
+python-dotenv
+psycopg[binary]
