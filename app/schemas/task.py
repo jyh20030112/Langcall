@@ -13,6 +13,7 @@ class CallTask(BaseModel):
     last_error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    next_attempt_at: datetime
     created_at: datetime
     updated_at: datetime
 

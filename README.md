@@ -176,6 +176,45 @@ WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
 CALL_PROCESSING_LOCK_TTL_SECONDS=120
 ```
 
+## 重试机制 + 死信队列
+
+现在 Worker 处理失败后不会立刻把任务永久标记为失败，而是按指数退避重试。
+
+### 重试规则
+
+- 第 1 次失败：`2^1 = 2` 秒后重试
+- 第 2 次失败：`2^2 = 4` 秒后重试
+- 第 3 次失败：`2^3 = 8` 秒后重试
+
+默认配置来自 `.env`：
+
+```env
+MAX_RETRY_COUNT=3
+RETRY_BACKOFF_BASE_SECONDS=2
+```
+
+### 任务状态
+
+现在 `call_tasks.task_status` 可能出现：
+
+- `pending`
+- `processing`
+- `retrying`
+- `success`
+- `dead`
+
+### 死信队列
+
+超过最大重试次数后，任务会被写入 `dead_letter_queue`，并把 `call_tasks.task_status` 更新为 `dead`。
+
+### 迁移
+
+如果你的数据库早于这次变更创建，需要手动执行：
+
+```bash
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/002_add_retry_and_dead_letter.sql
+```
+
 ## 第二步：先起 Docker 基础服务
 
 这一版采用“本机跑 Python，Docker 跑基础服务”的混合模式。

@@ -1,8 +1,10 @@
 from typing import Any
 
+from app.core.config import settings
 from app.graph.workflow import build_workflow
 from app.schemas.call_record import CallRecord
 from app.services.analysis_repository import AnalysisRepository
+from app.services.dead_letter_repository import DeadLetterRepository
 from app.services.raw_call_repository import RawCallRepository
 from app.services.redis_guard import build_call_processing_lock, release_webhook_guard, try_acquire_webhook_guard
 from app.services.task_repository import TaskRepository
@@ -77,7 +79,12 @@ def process_pending_task(worker_id: str) -> dict[str, Any] | None:
 
     try:
         if not processing_lock.acquire():
-            task_repository.mark_failed(task.id, f"redis lock not acquired for call_id={task.call_id}")
+            task_repository.mark_retrying(
+                task_id=task.id,
+                error_message=f"redis lock not acquired for call_id={task.call_id}",
+                retry_count=task.retry_count,
+                delay_seconds=1,
+            )
             return {
                 "task_id": task.id,
                 "call_id": task.call_id,
@@ -95,8 +102,49 @@ def process_pending_task(worker_id: str) -> dict[str, Any] | None:
             "analysis_id": result["analysis_id"],
         }
     except Exception as exc:
-        task_repository.mark_failed(task.id, str(exc))
-        raise
+        next_retry_count = task.retry_count + 1
+        error_message = str(exc)
+        if next_retry_count <= settings.max_retry_count:
+            delay_seconds = settings.retry_backoff_base_seconds ** next_retry_count
+            task_repository.mark_retrying(
+                task_id=task.id,
+                error_message=error_message,
+                retry_count=next_retry_count,
+                delay_seconds=delay_seconds,
+            )
+            return {
+                "task_id": task.id,
+                "call_id": task.call_id,
+                "raw_call_id": task.raw_call_id,
+                "analysis_id": None,
+                "retry_scheduled_in_seconds": delay_seconds,
+            }
+
+        call_record = raw_call_repository.get_raw_call_by_id(task.raw_call_id)
+        dead_letter_id = DeadLetterRepository().add_dead_letter(
+            task_id=task.id,
+            raw_call_id=task.raw_call_id,
+            call_id=task.call_id,
+            failed_stage="langgraph_analysis",
+            error_message=error_message,
+            payload={
+                "call_record": call_record.model_dump(),
+                "retry_count": next_retry_count,
+                "worker_id": worker_id,
+            },
+        )
+        task_repository.mark_dead(
+            task_id=task.id,
+            error_message=error_message,
+            retry_count=next_retry_count,
+        )
+        return {
+            "task_id": task.id,
+            "call_id": task.call_id,
+            "raw_call_id": task.raw_call_id,
+            "analysis_id": None,
+            "dead_letter_id": dead_letter_id,
+        }
     finally:
         try:
             if processing_lock.owned():

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: int = 3
     webhook_idempotency_ttl_seconds: int = 30
     call_processing_lock_ttl_seconds: int = 120
+    max_retry_count: int = 3
+    retry_backoff_base_seconds: int = 2
 
     model_config = SettingsConfigDict(
         env_file=".env",

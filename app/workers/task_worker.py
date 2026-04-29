@@ -19,12 +19,14 @@ def run_worker_loop() -> None:
             if processed:
                 print(
                     f"[task_worker] processed task_id={processed['task_id']} "
-                    f"call_id={processed['call_id']} analysis_id={processed['analysis_id']}"
+                    f"call_id={processed['call_id']} analysis_id={processed.get('analysis_id')} "
+                    f"retry_in={processed.get('retry_scheduled_in_seconds')} "
+                    f"dead_letter_id={processed.get('dead_letter_id')}"
                 )
             else:
                 time.sleep(settings.worker_poll_interval_seconds)
         except Exception as exc:
-            print(f"[task_worker] task processing failed: {exc}")
+            print(f"[task_worker] unexpected worker loop failure: {exc}")
             time.sleep(settings.worker_poll_interval_seconds)
 
 

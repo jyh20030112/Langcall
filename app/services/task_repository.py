@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from app.core.database import get_db_connection
 from app.schemas.task import CallTask, EnqueueTaskResult
 
@@ -31,9 +33,10 @@ class TaskRepository:
                         last_error,
                         started_at,
                         completed_at,
+                        next_attempt_at,
                         updated_at
                     )
-                    values (%s, %s, 'pending', 0, null, null, null, null, now())
+                    values (%s, %s, 'pending', 0, null, null, null, null, now(), now())
                     returning id as task_id, raw_call_id, call_id, task_status
                     """,
                     (raw_call_id, call_id),
@@ -54,7 +57,8 @@ class TaskRepository:
                     with next_task as (
                         select id
                         from call_tasks
-                        where task_status = 'pending'
+                        where task_status in ('pending', 'retrying')
+                          and next_attempt_at <= now()
                         order by created_at asc
                         for update skip locked
                         limit 1
@@ -64,6 +68,7 @@ class TaskRepository:
                         task_status = 'processing',
                         locked_by = %s,
                         started_at = now(),
+                        completed_at = null,
                         updated_at = now()
                     where id in (select id from next_task)
                     returning *
@@ -88,27 +93,48 @@ class TaskRepository:
                         completed_at = now(),
                         updated_at = now(),
                         last_error = null,
-                        locked_by = null
+                        locked_by = null,
+                        next_attempt_at = now()
                     where id = %s
                     """,
                     (task_id,),
                 )
 
-    def mark_failed(self, task_id: int, error_message: str) -> None:
+    def mark_retrying(self, task_id: int, error_message: str, retry_count: int, delay_seconds: int) -> None:
+        next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
         with get_db_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
                     update call_tasks
                     set
-                        task_status = 'failed',
+                        task_status = 'retrying',
                         last_error = %s,
-                        retry_count = retry_count + 1,
+                        retry_count = %s,
                         updated_at = now(),
+                        locked_by = null,
+                        next_attempt_at = %s
+                    where id = %s
+                    """,
+                    (error_message, retry_count, next_attempt_at, task_id),
+                )
+
+    def mark_dead(self, task_id: int, error_message: str, retry_count: int) -> None:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    update call_tasks
+                    set
+                        task_status = 'dead',
+                        last_error = %s,
+                        retry_count = %s,
+                        updated_at = now(),
+                        completed_at = now(),
                         locked_by = null
                     where id = %s
                     """,
-                    (error_message, task_id),
+                    (error_message, retry_count, task_id),
                 )
 
     def get_task_by_id(self, task_id: int) -> CallTask | None:
