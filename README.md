@@ -95,9 +95,65 @@ curl -X POST "http://127.0.0.1:8000/webhooks/calls" \
   }'
 ```
 
-这个接口会直接复用当前已经跑通的主链：
+这个接口已经改成异步入口：
 
-`保存 raw_calls -> 运行 LangGraph -> 保存 call_analysis`
+`保存 raw_calls -> 创建 call_tasks -> 立即返回 task_id`
+
+## 任务表 + Worker
+
+现在 webhook 已经改成“只入库并创建任务”，不会同步等待 LLM 分析完成。
+
+### 1. 先应用任务表 SQL
+
+如果你的 PostgreSQL 容器是在新增 `call_tasks` 之前就已经启动过，`init.sql` 不会自动重新执行。  
+这时请手动执行迁移脚本：
+
+```bash
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/001_add_call_tasks.sql
+```
+
+### 2. 启动 API
+
+```bash
+uvicorn app.main:app --reload
+```
+
+### 3. 启动 Worker
+
+另开一个终端：
+
+```bash
+python -m app.workers.task_worker
+```
+
+### 4. 发送 webhook
+
+```bash
+curl -X POST "http://127.0.0.1:8000/webhooks/calls" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "call_id": "api_call_002",
+    "source": "manual_webhook",
+    "customer_phone": "13800138000",
+    "customer_email": "demo@example.com",
+    "transcript_raw": "客服：您好，请问最近有租房计划吗？\n用户：我想先了解一下价格和地段。"
+  }'
+```
+
+这时接口会快速返回一个 `task_id`，而不是等待分析完成。
+
+### 5. 查询任务状态
+
+```bash
+curl "http://127.0.0.1:8000/webhooks/tasks/1"
+```
+
+你会看到任务在以下状态之间变化：
+
+- `pending`
+- `processing`
+- `success`
+- `failed`
 
 ## 第二步：先起 Docker 基础服务
 

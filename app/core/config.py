@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     smtp_from: str = "langcall@example.com"
     report_to: str = "manager@example.com"
+    worker_poll_interval_seconds: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",

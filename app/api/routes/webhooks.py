@@ -2,7 +2,8 @@ from fastapi import APIRouter
 
 from app.schemas.call_record import CallRecord
 from app.schemas.webhook import CallWebhookRequest, CallWebhookResponse
-from app.services.call_processor import process_call_record
+from app.services.call_processor import enqueue_call_record
+from app.services.task_repository import TaskRepository
 
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -18,10 +19,18 @@ def ingest_call_webhook(payload: CallWebhookRequest) -> CallWebhookResponse:
         customer_phone=payload.customer_phone,
         customer_email=payload.customer_email,
     )
-    result = process_call_record(call_record)
+    result = enqueue_call_record(call_record)
     return CallWebhookResponse(
-        status="success",
+        status="queued",
         raw_call_id=result["raw_call_id"],
-        analysis_id=result["analysis_id"],
+        task_id=result["task_id"],
         call_id=call_record.call_id,
     )
+
+
+@router.get("/tasks/{task_id}")
+def get_task_status(task_id: int) -> dict:
+    task = TaskRepository().get_task_by_id(task_id)
+    if task is None:
+        return {"status": "not_found", "task_id": task_id}
+    return task.model_dump(mode="json")

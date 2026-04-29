@@ -13,5 +13,5 @@ class CallWebhookRequest(BaseModel):
 class CallWebhookResponse(BaseModel):
     status: str
     raw_call_id: int
-    analysis_id: int
+    task_id: int
     call_id: str
