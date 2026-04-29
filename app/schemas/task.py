@@ -22,3 +22,4 @@ class EnqueueTaskResult(BaseModel):
     raw_call_id: int = Field(..., description="Related raw_calls id.")
     call_id: str
     task_status: str
+    is_duplicate: bool = False

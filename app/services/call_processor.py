@@ -4,6 +4,7 @@ from app.graph.workflow import build_workflow
 from app.schemas.call_record import CallRecord
 from app.services.analysis_repository import AnalysisRepository
 from app.services.raw_call_repository import RawCallRepository
+from app.services.redis_guard import build_call_processing_lock, release_webhook_guard, try_acquire_webhook_guard
 from app.services.task_repository import TaskRepository
 
 
@@ -33,12 +34,35 @@ def process_call_record(call_record: CallRecord) -> dict[str, Any]:
 
 
 def enqueue_call_record(call_record: CallRecord) -> dict[str, Any]:
-    raw_call_repository = RawCallRepository()
-    raw_call_id = raw_call_repository.save_raw_call(call_record)
-
+    guard = try_acquire_webhook_guard(call_record.call_id)
     task_repository = TaskRepository()
-    task = task_repository.enqueue_task(raw_call_id=raw_call_id, call_id=call_record.call_id)
-    return task.model_dump()
+
+    if not guard.acquired:
+        existing_task = task_repository.get_task_by_call_id(call_record.call_id)
+        if existing_task:
+            return {
+                "task_id": existing_task.id,
+                "raw_call_id": existing_task.raw_call_id,
+                "call_id": existing_task.call_id,
+                "task_status": existing_task.task_status,
+                "is_duplicate": True,
+            }
+
+        return {
+            "task_id": 0,
+            "raw_call_id": 0,
+            "call_id": call_record.call_id,
+            "task_status": "duplicate_inflight",
+            "is_duplicate": True,
+        }
+
+    raw_call_repository = RawCallRepository()
+    try:
+        raw_call_id = raw_call_repository.save_raw_call(call_record)
+        task = task_repository.enqueue_task(raw_call_id=raw_call_id, call_id=call_record.call_id)
+        return task.model_dump()
+    finally:
+        release_webhook_guard(call_record.call_id, guard.token)
 
 
 def process_pending_task(worker_id: str) -> dict[str, Any] | None:
@@ -49,8 +73,18 @@ def process_pending_task(worker_id: str) -> dict[str, Any] | None:
         return None
 
     raw_call_repository = RawCallRepository()
+    processing_lock = build_call_processing_lock(task.call_id)
 
     try:
+        if not processing_lock.acquire():
+            task_repository.mark_failed(task.id, f"redis lock not acquired for call_id={task.call_id}")
+            return {
+                "task_id": task.id,
+                "call_id": task.call_id,
+                "raw_call_id": task.raw_call_id,
+                "analysis_id": None,
+            }
+
         call_record = raw_call_repository.get_raw_call_by_id(task.raw_call_id)
         result = _analyze_raw_call(raw_call_id=task.raw_call_id, call_record=call_record)
         task_repository.mark_success(task.id)
@@ -63,3 +97,9 @@ def process_pending_task(worker_id: str) -> dict[str, Any] | None:
     except Exception as exc:
         task_repository.mark_failed(task.id, str(exc))
         raise
+    finally:
+        try:
+            if processing_lock.owned():
+                processing_lock.release()
+        except Exception:
+            pass

@@ -21,10 +21,12 @@ def ingest_call_webhook(payload: CallWebhookRequest) -> CallWebhookResponse:
     )
     result = enqueue_call_record(call_record)
     return CallWebhookResponse(
-        status="queued",
+        status="duplicate" if result["is_duplicate"] else "queued",
         raw_call_id=result["raw_call_id"],
         task_id=result["task_id"],
         call_id=call_record.call_id,
+        task_status=result["task_status"],
+        is_duplicate=result["is_duplicate"],
     )
 
 

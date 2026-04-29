@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     smtp_from: str = "langcall@example.com"
     report_to: str = "manager@example.com"
     worker_poll_interval_seconds: int = 3
+    webhook_idempotency_ttl_seconds: int = 30
+    call_processing_lock_ttl_seconds: int = 120
 
     model_config = SettingsConfigDict(
         env_file=".env",

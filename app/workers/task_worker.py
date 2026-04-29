@@ -17,7 +17,10 @@ def run_worker_loop() -> None:
         try:
             processed = process_pending_task(worker_id)
             if processed:
-                print(f"[task_worker] processed task_id={processed['task_id']} call_id={processed['call_id']}")
+                print(
+                    f"[task_worker] processed task_id={processed['task_id']} "
+                    f"call_id={processed['call_id']} analysis_id={processed['analysis_id']}"
+                )
             else:
                 time.sleep(settings.worker_poll_interval_seconds)
         except Exception as exc:

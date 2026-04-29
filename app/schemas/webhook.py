@@ -15,3 +15,5 @@ class CallWebhookResponse(BaseModel):
     raw_call_id: int
     task_id: int
     call_id: str
+    task_status: str
+    is_duplicate: bool = False

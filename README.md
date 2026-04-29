@@ -155,6 +155,27 @@ curl "http://127.0.0.1:8000/webhooks/tasks/1"
 - `success`
 - `failed`
 
+## Redis 幂等 + 分布式锁
+
+现在系统已经加了两层 Redis 保护：
+
+1. `Webhook 幂等`
+   - API 收到同一个 `call_id` 的重复请求时，会优先命中 Redis 短时幂等键。
+   - 重复请求不会重复创建任务，也不会把已经成功的任务重新打回 `pending`。
+
+2. `Worker 分布式锁`
+   - Worker 处理任务前，会按 `call_id` 获取 Redis 锁。
+   - 锁获取失败时，不会继续重复调用大模型。
+
+相关配置在 `.env`：
+
+```env
+REDIS_HOST=localhost
+REDIS_PORT=6379
+WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
+CALL_PROCESSING_LOCK_TTL_SECONDS=120
+```
+
 ## 第二步：先起 Docker 基础服务
 
 这一版采用“本机跑 Python，Docker 跑基础服务”的混合模式。
