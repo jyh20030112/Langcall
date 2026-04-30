@@ -1,25 +1,142 @@
-# LangCall Stage 1
+# LangCall
 
-这是 `LangCall` 的第一阶段最小可运行版本。
+`LangCall` 是一个面向客服/销售通话场景的 AI 智能分析与自动化系统。  
+当前版本已经完成从 `API 接收 -> 数据入库 -> 任务异步处理 -> LangGraph 分析 -> Redis 幂等与锁 -> 重试/死信 -> 日报汇总 -> Mailpit 邮件发送` 的完整闭环。
 
-## 目标
+## 当前已实现模块
 
-先跑通这条主流程：
+当前项目已经落地的模块有：
 
-`txt 对话文件 -> LangGraph -> 脱敏 -> Prompt -> LLM -> 结构化 JSON`
+1. `LangGraph` 分析工作流
+2. `FastAPI` 接口层
+3. `PostgreSQL` 原始数据、任务、分析结果、死信、日报持久化
+4. `Redis` 幂等保护与分布式锁
+5. `Worker` 异步任务处理
+6. `指数退避重试 + 死信队列`
+7. `Mailpit` 测试邮件
+8. `日报汇总 + HTML 邮件发送`
+9. `Adminer` 数据库可视化
 
-## 目录
+## 系统整体流程
 
-- `data/raw_calls/`: 原始测试对话
-- `data/outputs/`: 第一阶段本地 JSON 输出
-- `app/api/`: FastAPI 接口层
+当前系统的完整业务流程如下：
+
+```text
+Webhook / API 请求
+  -> 保存 raw_calls
+  -> Redis webhook 幂等判断
+  -> 创建 call_tasks
+  -> API 立即返回 task_id
+  -> Worker 轮询 call_tasks
+  -> Redis call_id 分布式锁
+  -> 读取 raw_calls
+  -> LangGraph 分析工作流
+  -> 保存 call_analysis
+  -> 更新任务状态
+  -> 失败时按指数退避重试
+  -> 超过阈值写入 dead_letter_queue
+  -> 日报汇总 daily_reports
+  -> Mailpit 发送测试邮件
+```
+
+## LangGraph 子工作流
+
+LangGraph 本身只负责 AI 分析主链，不负责任务调度。
+
+当前 LangGraph 图内流程是：
+
+```text
+normalize_input
+-> mask_pii
+-> build_prompt
+-> run_llm
+-> validate_output
+```
+
+也就是说：
+
+- `FastAPI / Worker / Redis / PostgreSQL` 属于系统工作流
+- `LangGraph` 属于系统工作流中的分析子流程
+
+## 项目目录
+
+```text
+第一阶段可运行版本/
+├── app/
+│   ├── api/
+│   │   └── routes/
+│   ├── core/
+│   ├── graph/
+│   ├── schemas/
+│   ├── services/
+│   └── workers/
+├── data/
+│   └── raw_calls/
+├── scripts/
+├── sql/
+│   ├── init.sql
+│   └── migrations/
+├── compose.yaml
+├── requirements.txt
+└── .env
+```
+
+各目录职责：
+
+- `app/api/`: FastAPI 接口
 - `app/graph/`: LangGraph 工作流
-- `app/services/`: 输入读取、脱敏、模型调用、预留存储接口
-- `scripts/run_demo.py`: 启动脚本
-- `compose.yaml`: 第二阶段基础服务容器编排
-- `sql/init.sql`: PostgreSQL 初始化表结构
+- `app/services/`: 业务服务层
+- `app/workers/`: 异步 Worker 与调度器
+- `sql/`: 建表与迁移脚本
+- `scripts/`: 手动测试脚本
+- `data/raw_calls/`: 本地 txt 输入样本
 
-## 安装
+## 数据库表
+
+当前项目已经使用的核心表：
+
+1. `raw_calls`
+   - 保存原始通话文本和基础字段
+
+2. `call_tasks`
+   - 保存异步任务状态
+   - 当前可能状态：
+     - `pending`
+     - `processing`
+     - `retrying`
+     - `success`
+     - `dead`
+
+3. `call_analysis`
+   - 保存 LangGraph 结构化分析结果
+
+4. `dead_letter_queue`
+   - 保存超过最大重试次数的失败任务
+
+5. `daily_reports`
+   - 保存日报发送记录和 HTML 内容
+
+## 运行模式
+
+当前项目采用“本机跑 Python，Docker 跑基础服务”的混合模式。
+
+本机运行：
+
+- FastAPI
+- Worker
+- report scheduler
+- 本地脚本
+
+Docker 运行：
+
+- PostgreSQL
+- Redis
+- Adminer
+- Mailpit
+
+## 安装依赖
+
+在项目根目录执行：
 
 ```bash
 python3 -m venv .venv
@@ -27,61 +144,135 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 配置
+## 环境变量
 
-默认启用 `mock LLM`，即使没有真实模型 Key 也能先跑通流程。
-
-如果要直接体验最小版本，`.env` 可以先保持：
-
-```env
-USE_MOCK_LLM=true
-LITELLM_MODEL=gpt-4o-mini
-RAW_CALLS_DIR=data/raw_calls
-OUTPUT_DIR=data/outputs
-```
-
-如果后面要切换成真实模型：
+请在 `.env` 中配置你自己的参数。关键项如下：
 
 ```env
 USE_MOCK_LLM=false
-LITELLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=your_openai_api_key
+LITELLM_MODEL=your_model_name
+DASHSCOPE_API_KEY=your_api_key
+
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=langcall
+POSTGRES_USER=langcall
+POSTGRES_PASSWORD=langcall123
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_FROM=langcall@example.com
+REPORT_TO=manager@example.com
+REPORT_TIMEZONE=Asia/Shanghai
+REPORT_HOUR=8
+REPORT_MINUTE=0
+
+WORKER_POLL_INTERVAL_SECONDS=3
+WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
+CALL_PROCESSING_LOCK_TTL_SECONDS=120
+MAX_RETRY_COUNT=3
+RETRY_BACKOFF_BASE_SECONDS=2
 ```
 
-## 运行
+## 启动基础服务
 
-查看有哪些输入文件：
+### 启动 Docker 服务
 
 ```bash
-python scripts/run_demo.py --list
+docker compose up -d
 ```
 
-运行默认的第一个 txt 文件：
+### 查看容器状态
 
 ```bash
-python scripts/run_demo.py
+docker compose ps
 ```
 
-运行指定文件：
+正常情况下会看到：
+
+1. `postgres`
+2. `redis`
+3. `adminer`
+4. `mailpit`
+
+### 访问地址
+
+- Adminer: `http://127.0.0.1:8080`
+- Mailpit: `http://127.0.0.1:8025`
+
+### Adminer 登录
+
+- System: `PostgreSQL`
+- Server: `postgres`
+- Username: `langcall`
+- Password: `langcall123`
+- Database: `langcall`
+
+## 数据库迁移
+
+如果你的 PostgreSQL 是很早之前就创建好的，需要按顺序补迁移。
+
+### 任务表迁移
 
 ```bash
-python scripts/run_demo.py data/raw_calls/call_003.txt
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/001_add_call_tasks.sql
 ```
 
-## FastAPI 启动
+### 重试与死信迁移
 
-先安装依赖，然后在项目根目录执行：
+```bash
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/002_add_retry_and_dead_letter.sql
+```
+
+### 日报表迁移
+
+```bash
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/003_add_daily_reports.sql
+```
+
+如果你是全新启动的数据库，`sql/init.sql` 会自动执行，一般不需要手动补迁移。
+
+## 启动应用
+
+### 1. 启动 FastAPI
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-启动成功后可以访问：
+可访问：
 
-- 接口文档：`http://127.0.0.1:8000/docs`
+- OpenAPI 文档：`http://127.0.0.1:8000/docs`
 - 健康检查：`http://127.0.0.1:8000/health`
 
-### Webhook 示例
+### 2. 启动任务 Worker
+
+另开一个终端：
+
+```bash
+python -m app.workers.task_worker
+```
+
+### 3. 启动日报调度器
+
+另开一个终端：
+
+```bash
+python -m app.workers.report_scheduler
+```
+
+## API 接口
+
+### 健康检查
+
+```bash
+curl "http://127.0.0.1:8000/health"
+```
+
+### 创建通话任务
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/webhooks/calls" \
@@ -95,98 +286,20 @@ curl -X POST "http://127.0.0.1:8000/webhooks/calls" \
   }'
 ```
 
-这个接口已经改成异步入口：
+当前接口行为：
 
-`保存 raw_calls -> 创建 call_tasks -> 立即返回 task_id`
+- 只保存 `raw_calls`
+- 创建 `call_tasks`
+- 快速返回 `task_id`
+- 不同步等待模型分析
 
-## 任务表 + Worker
-
-现在 webhook 已经改成“只入库并创建任务”，不会同步等待 LLM 分析完成。
-
-### 1. 先应用任务表 SQL
-
-如果你的 PostgreSQL 容器是在新增 `call_tasks` 之前就已经启动过，`init.sql` 不会自动重新执行。  
-这时请手动执行迁移脚本：
-
-```bash
-docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/001_add_call_tasks.sql
-```
-
-### 2. 启动 API
-
-```bash
-uvicorn app.main:app --reload
-```
-
-### 3. 启动 Worker
-
-另开一个终端：
-
-```bash
-python -m app.workers.task_worker
-```
-
-### 4. 发送 webhook
-
-```bash
-curl -X POST "http://127.0.0.1:8000/webhooks/calls" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "call_id": "api_call_002",
-    "source": "manual_webhook",
-    "customer_phone": "13800138000",
-    "customer_email": "demo@example.com",
-    "transcript_raw": "客服：您好，请问最近有租房计划吗？\n用户：我想先了解一下价格和地段。"
-  }'
-```
-
-这时接口会快速返回一个 `task_id`，而不是等待分析完成。
-
-### 5. 查询任务状态
+### 查询任务状态
 
 ```bash
 curl "http://127.0.0.1:8000/webhooks/tasks/1"
 ```
 
-你会看到任务在以下状态之间变化：
-
-- `pending`
-- `processing`
-- `success`
-- `failed`
-
-## Redis 幂等 + 分布式锁
-
-现在系统已经加了两层 Redis 保护：
-
-1. `Webhook 幂等`
-   - API 收到同一个 `call_id` 的重复请求时，会优先命中 Redis 短时幂等键。
-   - 重复请求不会重复创建任务，也不会把已经成功的任务重新打回 `pending`。
-
-2. `Worker 分布式锁`
-   - Worker 处理任务前，会按 `call_id` 获取 Redis 锁。
-   - 锁获取失败时，不会继续重复调用大模型。
-
-相关配置在 `.env`：
-
-```env
-REDIS_HOST=localhost
-REDIS_PORT=6379
-WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
-CALL_PROCESSING_LOCK_TTL_SECONDS=120
-```
-
-## Mailpit 测试邮件
-
-项目现在已经提供了一个最小测试邮件模块，默认通过 `Mailpit` 发送到本地测试邮箱服务。
-
-### 方式 1：用 FastAPI 接口发送
-
-启动 API 后，在 `/docs` 中调用：
-
-- `POST /mail/test`
-
-也可以直接用 `curl`：
+### 发送测试邮件
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/mail/test" \
@@ -198,34 +311,105 @@ curl -X POST "http://127.0.0.1:8000/mail/test" \
   }'
 ```
 
-### 方式 2：用脚本发送
+### 发送日报
+
+```bash
+curl -X POST "http://127.0.0.1:8000/reports/daily/send" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "report_date": "2026-04-30",
+    "recipient": "manager@example.com"
+  }'
+```
+
+### 查询已保存日报
+
+```bash
+curl "http://127.0.0.1:8000/reports/daily/2026-04-30"
+```
+
+## Worker、Redis 与重试机制
+
+### 任务处理
+
+Worker 会不断轮询 `call_tasks`，取出：
+
+- `pending`
+- `retrying` 且 `next_attempt_at <= now()`
+
+的任务进行处理。
+
+### Redis 幂等
+
+在 API 入口：
+
+- 同一个 `call_id` 的短时间重复请求会被 Redis 幂等键拦截
+- 已有任务不会重复创建
+
+### Redis 分布式锁
+
+在 Worker 处理前：
+
+- 按 `call_id` 获取 Redis 锁
+- 避免多个 Worker 并发分析同一条通话
+
+### 重试机制
+
+失败后按指数退避重试：
+
+- 第 1 次失败：2 秒
+- 第 2 次失败：4 秒
+- 第 3 次失败：8 秒
+
+对应配置：
+
+```env
+MAX_RETRY_COUNT=3
+RETRY_BACKOFF_BASE_SECONDS=2
+```
+
+### 死信队列
+
+超过最大重试次数后：
+
+- 任务状态改成 `dead`
+- 详细失败上下文写入 `dead_letter_queue`
+
+## Mailpit 测试邮件
+
+除了 API，你也可以直接用脚本发送测试邮件：
 
 ```bash
 python scripts/send_test_email.py
 ```
 
-### 查看测试邮件
-
-浏览器打开：
+发送成功后去浏览器查看：
 
 ```text
 http://127.0.0.1:8025
 ```
 
-你应该能在 Mailpit 页面里看到刚发出的测试邮件。
+## 日报汇总
 
-## 日报汇总 + Mailpit 邮件发送
+日报模块会从 `call_analysis` 中按天汇总：
 
-现在系统已经支持：
+- 总通话数
+- 正向数量
+- 中性数量
+- 负向数量
+- 混合数量
+- 需跟进数量
+- 每通电话的摘要与建议动作
 
-1. 从 `call_analysis` 汇总某一天的分析结果
-2. 生成 HTML 日报
-3. 通过 Mailpit 发送测试日报
-4. 将日报发送记录保存到 `daily_reports`
+然后：
 
-### 手动发送日报
+1. 生成 HTML 内容
+2. 通过 Mailpit 发送
+3. 落库到 `daily_reports`
 
-用脚本发送当天日报：
+### 手动脚本发送日报
+
+发送当天日报：
 
 ```bash
 python scripts/send_daily_report.py
@@ -234,172 +418,49 @@ python scripts/send_daily_report.py
 发送指定日期日报：
 
 ```bash
-python scripts/send_daily_report.py 2026-04-29
+python scripts/send_daily_report.py 2026-04-30
 ```
 
-### 通过 API 手动发送日报
+## 本地 txt 演示
+
+如果你想继续用本地样本快速验证 LangGraph 主链，也可以执行：
+
+查看可用输入：
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/reports/daily/send" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "report_date": "2026-04-29",
-    "recipient": "manager@example.com"
-  }'
+python scripts/run_demo.py --list
 ```
 
-### 查看已保存日报
+运行默认样本：
 
 ```bash
-curl "http://127.0.0.1:8000/reports/daily/2026-04-29"
+python scripts/run_demo.py
 ```
 
-### 启动日报调度器
-
-另开一个终端：
+运行指定文件：
 
 ```bash
-python -m app.workers.report_scheduler
+python scripts/run_demo.py data/raw_calls/call_003.txt
 ```
 
-调度器会按照 `.env` 中的配置时间每天自动尝试发送：
+## 当前推荐测试顺序
 
-```env
-REPORT_TIMEZONE=Asia/Shanghai
-REPORT_HOUR=8
-REPORT_MINUTE=0
-```
+建议按下面顺序验证整个系统：
 
-### 数据库迁移
+1. `docker compose up -d`
+2. `pip install -r requirements.txt`
+3. `uvicorn app.main:app --reload`
+4. `python -m app.workers.task_worker`
+5. 调用 `POST /webhooks/calls`
+6. 查看 `call_tasks` 状态变化
+7. 查看 `call_analysis` 是否生成
+8. 调用 `POST /mail/test`
+9. 查看 `http://127.0.0.1:8025`
+10. 调用 `POST /reports/daily/send`
+11. 查看 `daily_reports` 与 Mailpit 邮件内容
 
-如果你的数据库早于这次变更创建，需要执行：
 
-```bash
-docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/003_add_daily_reports.sql
-```
 
-## 重试机制 + 死信队列
 
-现在 Worker 处理失败后不会立刻把任务永久标记为失败，而是按指数退避重试。
 
-### 重试规则
 
-- 第 1 次失败：`2^1 = 2` 秒后重试
-- 第 2 次失败：`2^2 = 4` 秒后重试
-- 第 3 次失败：`2^3 = 8` 秒后重试
-
-默认配置来自 `.env`：
-
-```env
-MAX_RETRY_COUNT=3
-RETRY_BACKOFF_BASE_SECONDS=2
-```
-
-### 任务状态
-
-现在 `call_tasks.task_status` 可能出现：
-
-- `pending`
-- `processing`
-- `retrying`
-- `success`
-- `dead`
-
-### 死信队列
-
-超过最大重试次数后，任务会被写入 `dead_letter_queue`，并把 `call_tasks.task_status` 更新为 `dead`。
-
-### 迁移
-
-如果你的数据库早于这次变更创建，需要手动执行：
-
-```bash
-docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/002_add_retry_and_dead_letter.sql
-```
-
-## 第二步：先起 Docker 基础服务
-
-这一版采用“本机跑 Python，Docker 跑基础服务”的混合模式。
-
-### 先启动容器
-
-```bash
-docker compose up -d
-```
-
-### 查看容器状态
-
-```bash
-docker compose ps
-```
-
-正常情况下你会看到这 4 个服务：
-
-1. `postgres`
-2. `redis`
-3. `adminer`
-4. `mailpit`
-
-### 各服务用途
-
-- `postgres`: 后续正式存储原始通话和分析结果
-- `redis`: 后续做幂等控制和分布式锁
-- `adminer`: 浏览器查看数据库
-- `mailpit`: 本地测试邮件，不会真的发给外部邮箱
-
-### 浏览器访问地址
-
-- Adminer: `http://localhost:8080`
-- Mailpit: `http://localhost:8025`
-
-### Adminer 登录信息
-
-- System: `PostgreSQL`
-- Server: `postgres` 或 `host.docker.internal` 不适用于浏览器登录
-- 如果你通过浏览器访问 Adminer，推荐填：
-  - Server: `postgres`
-  - Username: `langcall`
-  - Password: `langcall123`
-  - Database: `langcall`
-
-### 本机 Python 连接 Docker 中的 PostgreSQL
-
-因为当前阶段你的 Python 脚本是在本机运行，所以代码里连接数据库时应使用：
-
-- Host: `localhost`
-- Port: `5432`
-- Database: `langcall`
-- User: `langcall`
-- Password: `langcall123`
-
-这也是 `.env` 里当前的默认值。
-
-### 停止容器
-
-```bash
-docker compose down
-```
-
-如果你想连数据卷一起删除：
-
-```bash
-docker compose down -v
-```
-
-## 输出
-
-运行成功后，你会看到：
-
-1. 原始对话文本
-2. 脱敏后的文本
-3. 模型原始输出
-4. 校验后的 JSON
-5. 数据库中的 `raw_calls` 和 `call_analysis` 新记录
-
-## 下一步建议
-
-现在基础服务已经容器化，下一步最合适的工作是：
-
-1. 验证 `raw_call_repository.py` 已经能写入 `raw_calls` 表
-2. 验证 `analysis_repository.py` 已经能写入 `call_analysis` 表
-3. 再继续扩展批量导入、FastAPI 和 Worker
