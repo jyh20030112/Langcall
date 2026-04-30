@@ -176,6 +176,108 @@ WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
 CALL_PROCESSING_LOCK_TTL_SECONDS=120
 ```
 
+## Mailpit 测试邮件
+
+项目现在已经提供了一个最小测试邮件模块，默认通过 `Mailpit` 发送到本地测试邮箱服务。
+
+### 方式 1：用 FastAPI 接口发送
+
+启动 API 后，在 `/docs` 中调用：
+
+- `POST /mail/test`
+
+也可以直接用 `curl`：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/mail/test" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to_email": "manager@example.com",
+    "subject": "LangCall Mailpit Test",
+    "message": "This is a test email sent to Mailpit."
+  }'
+```
+
+### 方式 2：用脚本发送
+
+```bash
+python scripts/send_test_email.py
+```
+
+### 查看测试邮件
+
+浏览器打开：
+
+```text
+http://127.0.0.1:8025
+```
+
+你应该能在 Mailpit 页面里看到刚发出的测试邮件。
+
+## 日报汇总 + Mailpit 邮件发送
+
+现在系统已经支持：
+
+1. 从 `call_analysis` 汇总某一天的分析结果
+2. 生成 HTML 日报
+3. 通过 Mailpit 发送测试日报
+4. 将日报发送记录保存到 `daily_reports`
+
+### 手动发送日报
+
+用脚本发送当天日报：
+
+```bash
+python scripts/send_daily_report.py
+```
+
+发送指定日期日报：
+
+```bash
+python scripts/send_daily_report.py 2026-04-29
+```
+
+### 通过 API 手动发送日报
+
+```bash
+curl -X POST "http://127.0.0.1:8000/reports/daily/send" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "report_date": "2026-04-29",
+    "recipient": "manager@example.com"
+  }'
+```
+
+### 查看已保存日报
+
+```bash
+curl "http://127.0.0.1:8000/reports/daily/2026-04-29"
+```
+
+### 启动日报调度器
+
+另开一个终端：
+
+```bash
+python -m app.workers.report_scheduler
+```
+
+调度器会按照 `.env` 中的配置时间每天自动尝试发送：
+
+```env
+REPORT_TIMEZONE=Asia/Shanghai
+REPORT_HOUR=8
+REPORT_MINUTE=0
+```
+
+### 数据库迁移
+
+如果你的数据库早于这次变更创建，需要执行：
+
+```bash
+docker compose exec -T postgres psql -U langcall -d langcall < sql/migrations/003_add_daily_reports.sql
+```
+
 ## 重试机制 + 死信队列
 
 现在 Worker 处理失败后不会立刻把任务永久标记为失败，而是按指数退避重试。

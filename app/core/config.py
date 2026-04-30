@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     smtp_from: str = "langcall@example.com"
     report_to: str = "manager@example.com"
+    report_timezone: str = "Asia/Shanghai"
+    report_hour: int = 8
+    report_minute: int = 0
     worker_poll_interval_seconds: int = 3
     webhook_idempotency_ttl_seconds: int = 30
     call_processing_lock_ttl_seconds: int = 120

@@ -5,6 +5,8 @@ load_dotenv()
 from fastapi import FastAPI
 
 from app.api.routes.health import router as health_router
+from app.api.routes.mail import router as mail_router
+from app.api.routes.reports import router as reports_router
 from app.api.routes.webhooks import router as webhook_router
 from app.core.config import settings
 
@@ -16,6 +18,8 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(mail_router)
+app.include_router(reports_router)
 app.include_router(webhook_router)
 
 
