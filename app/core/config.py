@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "LangCall Stage 1"
+    app_name: str = "LangCall"
     use_mock_llm: bool = False
     litellm_model: str = "dashscope/qwen3-max-2026-01-23"
     dashscope_api_key: str | None = None

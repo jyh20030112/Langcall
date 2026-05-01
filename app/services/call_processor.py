@@ -78,6 +78,7 @@ def process_pending_task(worker_id: str) -> dict[str, Any] | None:
     processing_lock = build_call_processing_lock(task.call_id)
 
     try:
+        #   当worker的Langgraph工作流崩溃时，需要重试处理
         if not processing_lock.acquire():
             task_repository.mark_retrying(
                 task_id=task.id,

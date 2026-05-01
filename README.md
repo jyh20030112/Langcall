@@ -15,7 +15,6 @@
 6. `指数退避重试 + 死信队列`
 7. `Mailpit` 测试邮件
 8. `日报汇总 + HTML 邮件发送`
-9. `Adminer` 数据库可视化
 
 ## 系统整体流程
 
@@ -40,8 +39,6 @@ Webhook / API 请求
 ```
 
 ## LangGraph 子工作流
-
-LangGraph 本身只负责 AI 分析主链，不负责任务调度。
 
 当前 LangGraph 图内流程是：
 
@@ -139,8 +136,6 @@ Docker 运行：
 在项目根目录执行：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -149,9 +144,12 @@ pip install -r requirements.txt
 请在 `.env` 中配置你自己的参数。关键项如下：
 
 ```env
+
 USE_MOCK_LLM=false
-LITELLM_MODEL=your_model_name
-DASHSCOPE_API_KEY=your_api_key
+LITELLM_MODEL=dashscope/qwen3-max-2026-01-23
+RAW_CALLS_DIR=data/raw_calls
+OUTPUT_DIR=data/outputs
+DASHSCOPE_API_KEY=your_dashscope_api_key
 
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
@@ -166,6 +164,7 @@ SMTP_HOST=localhost
 SMTP_PORT=1025
 SMTP_FROM=langcall@example.com
 REPORT_TO=manager@example.com
+
 REPORT_TIMEZONE=Asia/Shanghai
 REPORT_HOUR=8
 REPORT_MINUTE=0
@@ -175,6 +174,11 @@ WEBHOOK_IDEMPOTENCY_TTL_SECONDS=30
 CALL_PROCESSING_LOCK_TTL_SECONDS=120
 MAX_RETRY_COUNT=3
 RETRY_BACKOFF_BASE_SECONDS=2
+
+API_PORT=8000
+ADMINER_PORT=8080
+MAILPIT_WEB_PORT=8025
+
 ```
 
 ## 启动基础服务

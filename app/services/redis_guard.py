@@ -12,12 +12,12 @@ class RedisGuardResult:
     acquired: bool
     token: str
 
-
+# 防止同一个 call_id 重复排队
 def try_acquire_webhook_guard(call_id: str) -> RedisGuardResult:
     client = get_redis_client()
     key = f"idem:webhook:{call_id}"
     token = str(uuid4())
-    acquired = bool(
+    acquired = bool(    # 判断锁是否成功获取
         client.set(
             key,
             token,
@@ -35,7 +35,7 @@ def release_webhook_guard(call_id: str, token: str) -> None:
     if current_token == token:
         client.delete(key)
 
-
+# 防止多个 Worker 并发处理同一条通话
 def build_call_processing_lock(call_id: str) -> Lock:
     client = get_redis_client()
     return client.lock(
